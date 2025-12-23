@@ -381,6 +381,9 @@ def playlist(
     download: bool = typer.Option(False, "--download", "-d", help="Download tracks via YouTube"),
     output: str = typer.Option("./downloads", "--output", "-o", help="Output directory for downloads"),
     format: str = typer.Option("mp3", "--format", "-f", help="Audio format (mp3, m4a, opus)"),
+    skip_existing: bool = typer.Option(True, "--skip-existing/--no-skip", help="Skip already downloaded tracks"),
+    retries: int = typer.Option(3, "--retries", "-r", help="Number of retries for failed downloads"),
+    workers: int = typer.Option(3, "--workers", "-w", help="Number of concurrent downloads"),
 ):
     """
     Import and analyze a Spotify playlist.
@@ -537,6 +540,7 @@ def playlist(
                 # Progress tracking
                 downloaded = 0
                 failed = 0
+                skipped = 0
                 
                 with Progress(
                     SpinnerColumn(),
@@ -548,11 +552,14 @@ def playlist(
                     task = progress.add_task("Downloading...", total=len(tracks_to_download))
                     
                     def progress_callback(track_name, status, info):
-                        nonlocal downloaded, failed
+                        nonlocal downloaded, failed, skipped
                         if status == 'completed':
                             downloaded += 1
                             progress.update(task, advance=1, description=f"✅ {track_name[:30]}")
-                        elif status == 'failed' or status == 'not_found':
+                        elif status == 'skipped':
+                            skipped += 1
+                            progress.update(task, advance=1, description=f"⏭️ {track_name[:30]}")
+                        elif 'failed' in status or status == 'not_found':
                             failed += 1
                             progress.update(task, advance=1, description=f"❌ {track_name[:30]}")
                         elif status == 'downloading':
@@ -565,10 +572,15 @@ def playlist(
                         output_dir=output,
                         format=format,
                         progress_callback=progress_callback,
+                        skip_existing=skip_existing,
+                        max_retries=retries,
+                        max_workers=workers,
                     )
                 
                 console.print()
                 show_success(f"Downloaded: {downloaded}/{len(tracks_to_download)}")
+                if skipped > 0:
+                    show_info(f"Skipped (already exists): {skipped}")
                 if failed > 0:
                     show_error(f"Failed: {failed}")
                 show_info(f"Files saved to: {output}")
