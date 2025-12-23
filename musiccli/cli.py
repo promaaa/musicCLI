@@ -68,9 +68,11 @@ def setup(
     playlists_db_path: Optional[str] = typer.Option(None, "--playlists-db-path", "-p", help="Path to spotify_clean_playlists.sqlite3"),
     spotify_client_id: Optional[str] = typer.Option(None, "--spotify-client-id", help="Spotify API client ID"),
     spotify_client_secret: Optional[str] = typer.Option(None, "--spotify-client-secret", help="Spotify API client secret"),
+    turso_url: Optional[str] = typer.Option(None, "--turso-url", help="Turso database URL"),
+    turso_token: Optional[str] = typer.Option(None, "--turso-token", help="Turso auth token"),
 ):
     """
-    Configure MusicCLI with database paths and Spotify API credentials.
+    Configure MusicCLI with database paths and API credentials.
     """
     if db_path:
         set_config_value("db_path", db_path)
@@ -92,20 +94,34 @@ def setup(
         set_config_value("spotify_client_secret", spotify_client_secret)
         show_success("Spotify client secret set")
     
+    if turso_url:
+        set_config_value("turso_url", turso_url)
+        show_success(f"Turso URL set: {turso_url}")
+    
+    if turso_token:
+        set_config_value("turso_token", turso_token)
+        show_success("Turso token set")
+    
     # Show current config if no options provided
-    if not any([db_path, track_files_db_path, playlists_db_path, spotify_client_id, spotify_client_secret]):
+    all_opts = [db_path, track_files_db_path, playlists_db_path, spotify_client_id, spotify_client_secret, turso_url, turso_token]
+    if not any(all_opts):
         config = load_config()
         console.print("\n[bold]Current Configuration[/bold]")
         console.print(f"Config file: {CONFIG_PATH}")
-        console.print(f"Main DB: {config.get('db_path', '[not set]')}")
-        console.print(f"Track files DB: {config.get('track_files_db_path', '[not set]')}")
-        console.print(f"Playlists DB: {config.get('playlists_db_path', '[not set]')}")
-        console.print(f"Spotify API: {'configured' if config.get('spotify_client_id') else '[not set]'}")
-        console.print("\nTo set paths, use:")
-        console.print("  musiccli setup --db-path /path/to/spotify_clean.sqlite3")
-        console.print("  musiccli setup --files-db-path /path/to/spotify_clean_track_files.sqlite3")
-        console.print("  musiccli setup --playlists-db-path /path/to/spotify_clean_playlists.sqlite3")
-        console.print("  musiccli setup --spotify-client-id <id> --spotify-client-secret <secret>")
+        console.print()
+        console.print("[bold]Local Databases:[/bold]")
+        console.print(f"  Main DB: {config.get('db_path') or '[not set - using remote]'}")
+        console.print(f"  Track files DB: {config.get('track_files_db_path') or '[not set]'}")
+        console.print(f"  Playlists DB: {config.get('playlists_db_path') or '[not set]'}")
+        console.print()
+        console.print("[bold]Remote Database (Turso):[/bold]")
+        console.print(f"  URL: {config.get('turso_url') or '[using default public DB]'}")
+        console.print(f"  Token: {'[configured]' if config.get('turso_token') else '[not needed for public]'}")
+        console.print()
+        console.print("[bold]Spotify API:[/bold]")
+        console.print(f"  {'Configured ✓' if config.get('spotify_client_id') else 'Not configured'}")
+        console.print()
+        console.print("[dim]Note: Without local DB, MusicCLI uses the public Turso database automatically.[/dim]")
 
 
 # -------------------------------------------------
