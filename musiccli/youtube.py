@@ -67,11 +67,16 @@ def _cache_key(query: str) -> str:
     return hashlib.md5(query.lower().encode()).hexdigest()
 
 
-def build_search_query(track: Dict) -> str:
+def build_search_query(track: Dict, use_isrc: bool = True) -> str:
     """
     Build a search query from track metadata.
-    Format: "Artist - Title" for best YouTube Music results.
+    Uses ISRC code if available for exact matching, otherwise "Artist Title".
     """
+    # Try ISRC first for exact matching
+    isrc = track.get("isrc") or track.get("external_id_isrc")
+    if use_isrc and isrc:
+        return isrc
+    
     artists = track.get("artists", "")
     if isinstance(artists, list):
         # Take first artist for cleaner search
@@ -92,6 +97,32 @@ def build_search_query(track: Dict) -> str:
     query = re.sub(r'\s*\[.*?\]', '', query)  # Remove [anything]
     
     return query.strip()
+
+
+def search_youtube_with_fallback(
+    track: Dict,
+    limit: int = 1,
+) -> List[Dict]:
+    """
+    Search YouTube with ISRC first, then fallback to name search.
+    
+    Args:
+        track: Track dict with 'name', 'artists', optionally 'isrc'
+        limit: Number of results
+        
+    Returns:
+        List of YouTube results
+    """
+    # Try ISRC search first (more accurate)
+    isrc = track.get("isrc") or track.get("external_id_isrc")
+    if isrc:
+        results = search_youtube(isrc, limit=limit, use_cache=True)
+        if results:
+            return results
+    
+    # Fallback to name search
+    query = build_search_query(track, use_isrc=False)
+    return search_youtube(query, limit=limit, use_cache=True)
 
 
 def search_youtube(
@@ -354,11 +385,10 @@ def download_tracks_batch(
         safe_name = track_info.get('_safe_name', track_name)
         artist_str = track_info.get('_artist_str', '')
         
-        # Search for YouTube URL
+        # Search for YouTube URL using ISRC first, then name
         url = track_info.get('youtube_url')
         if not url:
-            query = build_search_query(track_info)
-            search_results = search_youtube(query, limit=1)
+            search_results = search_youtube_with_fallback(track_info, limit=1)
             
             if not search_results:
                 return (track_id, track_name, None, 'not_found')
