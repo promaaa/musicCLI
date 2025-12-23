@@ -1,13 +1,22 @@
 # musiccli/db.py
 """
 Database module for querying Anna's Archive Spotify metadata.
-Uses local SQLite databases: spotify_clean.sqlite3 and spotify_clean_track_files.sqlite3
+Supports both local SQLite and remote Turso databases.
 """
 
 import sqlite3
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Dict
 from musiccli.config import load_config
+
+
+def _has_local_db() -> bool:
+    """Check if local database is configured and exists."""
+    config = load_config()
+    db_path = config.get("db_path")
+    if not db_path:
+        return False
+    return Path(db_path).exists()
 
 
 def get_db_connection(db_name: str = "main") -> sqlite3.Connection:
@@ -37,8 +46,26 @@ def get_db_connection(db_name: str = "main") -> sqlite3.Connection:
     return conn
 
 
-def search_tracks(query: str, limit: int = 20) -> list[dict]:
-    """Search tracks by name, ordered by popularity."""
+def search_tracks(query: str, limit: int = 20) -> List[Dict]:
+    """Search tracks by name, ordered by popularity. Uses local DB or remote fallback."""
+    # Try local DB first
+    if _has_local_db():
+        return _search_tracks_local(query, limit)
+    
+    # Fallback to remote Turso DB
+    try:
+        from musiccli.remote_db import search_tracks_remote
+        return search_tracks_remote(query, limit)
+    except ImportError:
+        raise FileNotFoundError(
+            "No database available. Either:\n"
+            "  1. Configure local DB: musiccli setup --db-path /path/to/db\n"
+            "  2. Install libsql: pip install libsql-experimental"
+        )
+
+
+def _search_tracks_local(query: str, limit: int = 20) -> List[Dict]:
+    """Search tracks in local database."""
     conn = get_db_connection("main")
     cursor = conn.cursor()
     
@@ -282,14 +309,29 @@ def get_track_file_info(track_id: str) -> Optional[dict]:
     return None
 
 
-def get_tracks_by_ids(track_ids: list[str]) -> dict[str, dict]:
+def get_tracks_by_ids(track_ids: List[str]) -> Dict[str, Dict]:
     """
     Get multiple tracks by their Spotify IDs.
     Returns a dict mapping track_id -> track_data.
+    Uses local DB or remote fallback.
     """
     if not track_ids:
         return {}
     
+    # Try local DB first
+    if _has_local_db():
+        return _get_tracks_by_ids_local(track_ids)
+    
+    # Fallback to remote Turso DB
+    try:
+        from musiccli.remote_db import get_tracks_by_ids_remote
+        return get_tracks_by_ids_remote(track_ids)
+    except ImportError:
+        return {}
+
+
+def _get_tracks_by_ids_local(track_ids: List[str]) -> Dict[str, Dict]:
+    """Get multiple tracks from local database."""
     conn = get_db_connection("main")
     cursor = conn.cursor()
     

@@ -26,6 +26,10 @@ dependencies = [
   "yt-dlp>=2024.0"
 ]
 
+[project.optional-dependencies]
+remote = ["libsql-experimental>=0.0.50"]
+all = ["libsql-experimental>=0.0.50"]
+
 keywords = [
   "cli",
   "music",
