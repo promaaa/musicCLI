@@ -660,3 +660,170 @@ def download(
         raise typer.Exit(code=1)
 
 
+# -------------------------------------------------
+# Album download command
+# -------------------------------------------------
+
+@app.command(name="get-album")
+def get_album(
+    url: str = typer.Argument(..., help="Spotify album URL"),
+    download: bool = typer.Option(False, "--download", "-d", help="Download all tracks"),
+    output: str = typer.Option("./downloads", "--output", "-o", help="Output directory"),
+    format: str = typer.Option("mp3", "--format", "-f", help="Audio format"),
+):
+    """
+    Fetch a Spotify album and optionally download all tracks.
+    
+    Example: musiccli get-album https://open.spotify.com/album/...
+    """
+    from musiccli.spotify import parse_spotify_url, SpotifyClient
+    from musiccli.youtube import download_tracks_batch
+    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
+    
+    # Parse URL
+    parsed = parse_spotify_url(url)
+    if not parsed:
+        show_error(f"Invalid Spotify URL: {url}")
+        raise typer.Exit(code=1)
+    
+    item_type, item_id = parsed
+    if item_type != "album":
+        show_error(f"URL is a {item_type}, not an album.")
+        raise typer.Exit(code=1)
+    
+    # Fetch album
+    show_info(f"Fetching album {item_id}...")
+    
+    try:
+        client = SpotifyClient()
+        token = client._get_token()
+        
+        import requests
+        resp = requests.get(
+            f"https://api.spotify.com/v1/albums/{item_id}",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        resp.raise_for_status()
+        album_data = resp.json()
+    except Exception as e:
+        show_error(f"Failed to fetch album: {e}")
+        raise typer.Exit(code=1)
+    
+    # Display album info
+    album_name = album_data.get("name", "Unknown Album")
+    artists = ", ".join(a["name"] for a in album_data.get("artists", []))
+    total_tracks = album_data.get("total_tracks", 0)
+    release_date = album_data.get("release_date", "Unknown")
+    
+    console.print(f"\n[bold]{album_name}[/bold]")
+    console.print(f"[dim]{artists} • {release_date} • {total_tracks} tracks[/dim]\n")
+    
+    # Get tracks
+    tracks = []
+    for item in album_data.get("tracks", {}).get("items", []):
+        track_artists = ", ".join(a["name"] for a in item.get("artists", []))
+        tracks.append({
+            "id": item.get("id"),
+            "name": item.get("name"),
+            "artists": track_artists,
+            "album_name": album_name,
+            "duration_ms": item.get("duration_ms"),
+        })
+    
+    # Show tracks
+    for i, t in enumerate(tracks, 1):
+        duration = t.get("duration_ms", 0) // 1000
+        mins, secs = divmod(duration, 60)
+        console.print(f"  {i:2}. {t['name'][:45]:45} [dim]{mins}:{secs:02d}[/dim]")
+    
+    console.print()
+    
+    if not download:
+        show_info(f"Use --download to download all {len(tracks)} tracks.")
+        return
+    
+    # Download
+    show_info(f"Downloading {len(tracks)} tracks...")
+    
+    downloaded = 0
+    failed = 0
+    
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Downloading...", total=len(tracks))
+        
+        def progress_cb(name, status, info):
+            nonlocal downloaded, failed
+            if status == 'completed':
+                downloaded += 1
+                progress.update(task, advance=1, description=f"✅ {name[:30]}")
+            elif 'failed' in status or status == 'not_found':
+                failed += 1
+                progress.update(task, advance=1, description=f"❌ {name[:30]}")
+            elif status == 'skipped':
+                progress.update(task, advance=1, description=f"⏭️ {name[:30]}")
+        
+        download_tracks_batch(
+            tracks=tracks,
+            output_dir=output,
+            format=format,
+            progress_callback=progress_cb,
+        )
+    
+    console.print()
+    show_success(f"Downloaded: {downloaded}/{len(tracks)}")
+    if failed > 0:
+        show_error(f"Failed: {failed}")
+    show_info(f"Files saved to: {output}")
+
+
+# -------------------------------------------------
+# Stats command
+# -------------------------------------------------
+
+@app.command()
+def stats():
+    """
+    Show MusicCLI statistics and cache information.
+    """
+    import json
+    from pathlib import Path
+    
+    cache_file = Path.home() / ".cache" / "musiccli" / "youtube_cache.json"
+    config_file = Path.home() / ".config" / "musiccli" / "config.toml"
+    
+    console.print("\n[bold]📊 MusicCLI Stats[/bold]\n")
+    
+    # Cache info
+    if cache_file.exists():
+        try:
+            with open(cache_file, 'r') as f:
+                cache = json.load(f)
+            cache_size = cache_file.stat().st_size / 1024
+            console.print(f"[bold]YouTube Cache:[/bold]")
+            console.print(f"  Entries: {len(cache)}")
+            console.print(f"  Size: {cache_size:.1f} KB")
+            console.print(f"  Path: {cache_file}")
+        except Exception:
+            console.print("  Cache: [dim]Error reading[/dim]")
+    else:
+        console.print("  Cache: [dim]Not created yet[/dim]")
+    
+    console.print()
+    
+    # Config info
+    console.print("[bold]Configuration:[/bold]")
+    if config_file.exists():
+        config = load_config()
+        console.print(f"  Spotify API: {'✅ Configured' if config.get('spotify_client_id') else '❌ Not set'}")
+        console.print(f"  Local DB: {'✅ ' + config.get('db_path', '')[:30] if config.get('db_path') else '❌ Using remote'}")
+        console.print(f"  Turso: {'✅ Custom' if config.get('turso_url') else '🌐 Public DB'}")
+    else:
+        console.print("  [dim]No config file[/dim]")
+    
+    console.print()
