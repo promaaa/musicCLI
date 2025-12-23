@@ -46,9 +46,30 @@ from musiccli.spotify import (
 # App + Console
 # -------------------------------------------------
 
+from musiccli import __version__
+
+
+def version_callback(value: bool):
+    if value:
+        console.print(f"[bold]MusicCLI[/bold] version {__version__}")
+        raise typer.Exit()
+
+
 app = typer.Typer(
-    help="🎵 MusicCLI — Browse Anna's Archive Spotify metadata from your terminal",
+    help="🎵 MusicCLI — Download Spotify playlists from your terminal",
+    context_settings={"help_option_names": ["-h", "--help"]},
 )
+
+
+@app.callback()
+def main(
+    version: bool = typer.Option(
+        False, "--version", "-V", callback=version_callback, is_eager=True,
+        help="Show version and exit"
+    ),
+):
+    """MusicCLI - Download Spotify playlists from your terminal."""
+    pass
 
 
 class SearchType(str, Enum):
@@ -356,6 +377,7 @@ def playlist(
     url: str = typer.Argument(..., help="Spotify playlist URL"),
     show_all: bool = typer.Option(False, "--all", "-a", help="Show all tracks including missing"),
     export: Optional[str] = typer.Option(None, "--export", "-e", help="Export results to JSON file"),
+    csv_export: Optional[str] = typer.Option(None, "--csv", help="Export results to CSV file"),
     download: bool = typer.Option(False, "--download", "-d", help="Download tracks via YouTube"),
     output: str = typer.Option("./downloads", "--output", "-o", help="Output directory for downloads"),
     format: str = typer.Option("mp3", "--format", "-f", help="Audio format (mp3, m4a, opus)"),
@@ -472,6 +494,28 @@ def playlist(
             with open(export, "w", encoding="utf-8") as f:
                 json.dump(export_data, f, indent=2, ensure_ascii=False)
             show_success(f"Exported to {export}")
+        
+        # CSV export if requested
+        if csv_export:
+            import csv
+            with open(csv_export, "w", encoding="utf-8", newline="") as f:
+                writer = csv.writer(f)
+                # Header
+                writer.writerow(["id", "name", "artists", "album", "duration_ms", "status"])
+                # Data
+                for r in results:
+                    artists = r.get("artists", "")
+                    if isinstance(artists, list):
+                        artists = ", ".join(str(a) for a in artists)
+                    writer.writerow([
+                        r.get("id", ""),
+                        r.get("name", ""),
+                        artists,
+                        r.get("album_name", ""),
+                        r.get("duration_ms", ""),
+                        r.get("status", ""),
+                    ])
+            show_success(f"Exported CSV to {csv_export}")
         
         # Download if requested
         if download:

@@ -6,11 +6,17 @@ Searches YouTube Music and downloads audio when tracks are not in Anna's Archive
 
 import os
 import re
+import json
+import hashlib
 from pathlib import Path
 from typing import Optional, List, Dict, Callable
 
 # yt-dlp is imported lazily to avoid startup penalty
 _ydl_module = None
+
+# Simple in-memory cache for YouTube searches
+_search_cache: Dict[str, List[Dict]] = {}
+_CACHE_FILE = Path.home() / ".cache" / "musiccli" / "youtube_cache.json"
 
 
 def _get_ydl():
@@ -28,6 +34,39 @@ def _get_ydl():
     return _ydl_module
 
 
+def _load_cache() -> Dict[str, List[Dict]]:
+    """Load search cache from disk."""
+    global _search_cache
+    if _search_cache:
+        return _search_cache
+    
+    try:
+        if _CACHE_FILE.exists():
+            with open(_CACHE_FILE, 'r', encoding='utf-8') as f:
+                _search_cache = json.load(f)
+    except Exception:
+        _search_cache = {}
+    
+    return _search_cache
+
+
+def _save_cache():
+    """Save search cache to disk."""
+    try:
+        _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(_CACHE_FILE, 'w', encoding='utf-8') as f:
+            # Keep only last 1000 entries
+            cache_to_save = dict(list(_search_cache.items())[-1000:])
+            json.dump(cache_to_save, f)
+    except Exception:
+        pass
+
+
+def _cache_key(query: str) -> str:
+    """Generate cache key for a query."""
+    return hashlib.md5(query.lower().encode()).hexdigest()
+
+
 def build_search_query(track: Dict) -> str:
     """
     Build a search query from track metadata.
@@ -35,40 +74,58 @@ def build_search_query(track: Dict) -> str:
     """
     artists = track.get("artists", "")
     if isinstance(artists, list):
-        artists = ", ".join(a.get("name", a) if isinstance(a, dict) else a for a in artists)
+        # Take first artist for cleaner search
+        if artists:
+            first_artist = artists[0]
+            artists = first_artist.get("name", first_artist) if isinstance(first_artist, dict) else first_artist
+        else:
+            artists = ""
     
     title = track.get("name", "")
     
     # Clean up the query
-    query = f"{artists} - {title}".strip()
+    query = f"{artists} {title}".strip()
     
     # Remove common suffixes that hurt search
-    query = re.sub(r'\s*\(.*?(remaster|remix|live|version|edit).*?\)', '', query, flags=re.IGNORECASE)
+    query = re.sub(r'\s*[-–]\s*(Remaster(ed)?|Remix|Live|Version|Edit|Original|Mono|Stereo).*$', '', query, flags=re.IGNORECASE)
+    query = re.sub(r'\s*\(.*?(remaster|remix|live|version|edit|feat\.|ft\.|with).*?\)', '', query, flags=re.IGNORECASE)
+    query = re.sub(r'\s*\[.*?\]', '', query)  # Remove [anything]
     
-    return query
+    return query.strip()
 
 
 def search_youtube(
     query: str,
     limit: int = 1,
-    music_only: bool = True
+    music_only: bool = True,
+    use_cache: bool = True
 ) -> List[Dict]:
     """
     Search YouTube (or YouTube Music) for tracks.
     
     Args:
-        query: Search query (e.g., "Queen - Bohemian Rhapsody")
+        query: Search query (e.g., "Queen Bohemian Rhapsody")
         limit: Number of results to return
-        music_only: If True, prefer YouTube Music results
+        music_only: If True, filter for music content
+        use_cache: If True, use cached results
         
     Returns:
         List of track info dicts with id, title, url, duration, etc.
     """
+    # Check cache first
+    cache = _load_cache()
+    key = _cache_key(query)
+    
+    if use_cache and key in cache:
+        cached = cache[key]
+        return cached[:limit]
+    
     yt_dlp = _get_ydl()
     
-    # Use ytsearch for YouTube Music (better for songs)
-    search_prefix = "ytsearch" if not music_only else "ytsearch"
-    search_url = f"{search_prefix}{limit}:{query}"
+    # Use ytsearch for YouTube (more reliable than ytmsearch)
+    # Adding "audio" to query helps find music
+    search_query = f"{query} audio" if music_only else query
+    search_url = f"ytsearch{limit + 5}:{search_query}"  # Get extra results for filtering
     
     opts = {
         'format': 'bestaudio/best',
@@ -89,18 +146,35 @@ def search_youtube(
             if not entries:
                 return []
             
-            # Filter out None entries
-            return [
-                {
+            # Filter and format results
+            results = []
+            for e in entries:
+                if e is None:
+                    continue
+                
+                # Skip very long videos (likely not music)
+                duration = e.get('duration') or 0
+                if duration > 900:  # > 15 minutes
+                    continue
+                
+                results.append({
                     'id': e.get('id'),
                     'title': e.get('title'),
                     'url': e.get('url') or f"https://www.youtube.com/watch?v={e.get('id')}",
-                    'duration': e.get('duration'),
+                    'duration': duration,
                     'channel': e.get('channel') or e.get('uploader'),
                     'view_count': e.get('view_count'),
-                }
-                for e in entries if e is not None
-            ]
+                })
+                
+                if len(results) >= limit + 3:
+                    break
+            
+            # Cache results
+            if results:
+                _search_cache[key] = results
+                _save_cache()
+            
+            return results[:limit]
             
     except Exception as e:
         print(f"YouTube search error: {e}")
