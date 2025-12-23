@@ -289,9 +289,12 @@ def download_tracks_batch(
     format: str = "mp3",
     quality: str = "320",
     progress_callback: Optional[Callable] = None,
+    skip_existing: bool = True,
+    max_retries: int = 3,
+    max_workers: int = 3,
 ) -> Dict[str, str]:
     """
-    Download multiple tracks from YouTube.
+    Download multiple tracks from YouTube with skip, retry, and concurrent support.
     
     Args:
         tracks: List of track dicts with 'name', 'artists', optionally 'youtube_url'
@@ -299,64 +302,126 @@ def download_tracks_batch(
         format: Audio format
         quality: Audio quality
         progress_callback: Callback(track_name, status, progress) for updates
+        skip_existing: Skip tracks that are already downloaded
+        max_retries: Number of retries for failed downloads
+        max_workers: Number of concurrent downloads
         
     Returns:
         Dict mapping track_id -> downloaded file path (or None if failed)
     """
-    results = {}
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import glob
     
-    for i, track in enumerate(tracks):
-        track_id = track.get('id', str(i))
+    results = {}
+    tracks_to_download = []
+    
+    # Phase 1: Check existing files and filter
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    
+    for track in tracks:
+        track_id = track.get('id', '')
         track_name = track.get('name', 'Unknown')
         artists = track.get('artists', 'Unknown Artist')
         
-        if progress_callback:
-            progress_callback(track_name, 'searching', f"{i+1}/{len(tracks)}")
-        
-        # Search if no URL provided
-        url = track.get('youtube_url')
-        if not url:
-            query = build_search_query(track)
-            search_results = search_youtube(query, limit=1)
-            
-            if not search_results:
-                if progress_callback:
-                    progress_callback(track_name, 'not_found', None)
-                results[track_id] = None
-                continue
-            
-            url = search_results[0]['url']
-        
-        # Build filename
         if isinstance(artists, list):
-            artist_str = ", ".join(artists)
+            artist_str = ", ".join(str(a) for a in artists)
         else:
             artist_str = str(artists)
         
-        # Sanitize filename
+        # Check if file already exists
         safe_name = re.sub(r'[<>:"/\\|?*]', '', f"{artist_str} - {track_name}")
+        expected_path = os.path.join(output_dir, f"{safe_name}.{format}")
         
-        if progress_callback:
-            progress_callback(track_name, 'downloading', '0%')
+        if skip_existing and os.path.exists(expected_path):
+            if progress_callback:
+                progress_callback(track_name, 'skipped', expected_path)
+            results[track_id] = expected_path
+        else:
+            tracks_to_download.append({
+                **track,
+                '_safe_name': safe_name,
+                '_artist_str': artist_str,
+            })
+    
+    if not tracks_to_download:
+        return results
+    
+    # Phase 2: Download with concurrency and retry
+    def download_single(track_info: Dict) -> tuple:
+        """Download a single track with retries."""
+        track_id = track_info.get('id', '')
+        track_name = track_info.get('name', 'Unknown')
+        safe_name = track_info.get('_safe_name', track_name)
+        artist_str = track_info.get('_artist_str', '')
         
-        # Download
-        file_path = download_track(
-            url=url,
-            output_dir=output_dir,
-            filename_template=safe_name,
-            format=format,
-            quality=quality,
-            metadata={
-                'title': track_name,
-                'artist': artist_str,
-                'album': track.get('album_name', ''),
-            }
-        )
+        # Search for YouTube URL
+        url = track_info.get('youtube_url')
+        if not url:
+            query = build_search_query(track_info)
+            search_results = search_youtube(query, limit=1)
+            
+            if not search_results:
+                return (track_id, track_name, None, 'not_found')
+            
+            url = search_results[0]['url']
         
-        results[track_id] = file_path
+        # Retry loop
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                file_path = download_track(
+                    url=url,
+                    output_dir=output_dir,
+                    filename_template=safe_name,
+                    format=format,
+                    quality=quality,
+                    metadata={
+                        'title': track_name,
+                        'artist': artist_str,
+                        'album': track_info.get('album_name', ''),
+                    }
+                )
+                
+                if file_path:
+                    return (track_id, track_name, file_path, 'completed')
+                    
+            except Exception as e:
+                last_error = str(e)
+                
+            # Wait before retry
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(1 * (attempt + 1))  # Exponential backoff
         
-        if progress_callback:
-            status = 'completed' if file_path else 'failed'
-            progress_callback(track_name, status, file_path)
+        return (track_id, track_name, None, f'failed after {max_retries} retries')
+    
+    # Execute downloads concurrently
+    completed = 0
+    total = len(tracks_to_download)
+    
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(download_single, track): track 
+            for track in tracks_to_download
+        }
+        
+        for future in as_completed(futures):
+            track_id, track_name, file_path, status = future.result()
+            results[track_id] = file_path
+            completed += 1
+            
+            if progress_callback:
+                progress_callback(track_name, status, f"{completed}/{total}")
     
     return results
+
+
+def get_existing_downloads(output_dir: str, format: str = "mp3") -> set:
+    """Get set of existing downloaded filenames (without extension)."""
+    pattern = os.path.join(output_dir, f"*.{format}")
+    existing = set()
+    for path in glob.glob(pattern):
+        name = os.path.splitext(os.path.basename(path))[0]
+        existing.add(name.lower())
+    return existing
+
