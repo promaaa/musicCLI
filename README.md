@@ -4,6 +4,11 @@
     <strong>Download Spotify playlists from your terminal</strong>
   </p>
   <p align="center">
+    <img src="https://img.shields.io/badge/version-0.2.0-blue" alt="Version">
+    <img src="https://img.shields.io/badge/python-3.9+-green" alt="Python">
+    <img src="https://img.shields.io/badge/license-MIT-purple" alt="License">
+  </p>
+  <p align="center">
     <a href="#features">Features</a> •
     <a href="#installation">Installation</a> •
     <a href="#quick-start">Quick Start</a> •
@@ -19,10 +24,10 @@
 MusicCLI is a command-line tool that lets you:
 - 📋 **Import Spotify playlists** by URL
 - 🔍 **Search** for tracks, artists, and albums
-- ⬇️ **Download** tracks via YouTube (with metadata from Spotify)
+- ⬇️ **Download** tracks via YouTube (with Spotify metadata)
 - 📊 **Analyze** playlist availability in Anna's Archive
 
-> **Note**: This tool searches YouTube for audio files - it doesn't directly download from Spotify.
+> **How it works**: MusicCLI fetches playlist metadata from Spotify, then downloads the audio from YouTube using yt-dlp.
 
 ---
 
@@ -30,11 +35,13 @@ MusicCLI is a command-line tool that lets you:
 
 | Feature | Description |
 |---------|-------------|
-| � **Playlist Import** | Paste a Spotify playlist URL, get all tracks |
+| 🔗 **Playlist Import** | Paste a Spotify playlist URL, get all tracks |
 | 🔍 **Search** | Search tracks, artists, albums by name |
 | ⬇️ **YouTube Download** | Download audio from YouTube with Spotify metadata |
-| 📊 **Archive Check** | See which tracks exist in Anna's Archive (optional) |
-| 🎨 **Rich UI** | Beautiful terminal interface with colors and tables |
+| 📊 **Archive Check** | See which tracks exist in Anna's Archive |
+| 💾 **Smart Caching** | Caches YouTube searches for faster repeat downloads |
+| 📤 **Export** | Export playlists to JSON or CSV |
+| 🌐 **Remote DB** | Uses hosted database (no 200GB download needed) |
 
 ---
 
@@ -50,6 +57,9 @@ brew install ffmpeg
 
 # Install FFmpeg (Ubuntu/Debian)
 sudo apt install ffmpeg
+
+# Install FFmpeg (Windows)
+winget install ffmpeg
 ```
 
 ### Install MusicCLI
@@ -64,6 +74,9 @@ Or from source:
 git clone https://github.com/promaaa/musicCLI
 cd musicCLI
 pip install -e .
+
+# Optional: Install remote database support
+pip install -e ".[remote]"
 ```
 
 ---
@@ -86,12 +99,21 @@ musiccli playlist https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M
 
 # Download missing tracks via YouTube
 musiccli playlist https://open.spotify.com/playlist/... --download
+
+# Export to CSV
+musiccli playlist https://open.spotify.com/playlist/... --csv tracks.csv
 ```
 
 ### 3. Download a single track
 
 ```bash
 musiccli download "Queen Bohemian Rhapsody"
+```
+
+### 4. Check version
+
+```bash
+musiccli --version
 ```
 
 ---
@@ -115,12 +137,16 @@ musiccli playlist <url> --download
 # Export to JSON
 musiccli playlist <url> --export playlist.json
 
+# Export to CSV
+musiccli playlist <url> --csv playlist.csv
+
 # Options
 --all, -a         Show all tracks including missing
 --download, -d    Download tracks via YouTube  
 --output, -o      Output directory (default: ./downloads)
 --format, -f      Audio format: mp3, m4a, opus (default: mp3)
 --export, -e      Export results to JSON file
+--csv             Export results to CSV file
 ```
 
 ### `musiccli download <query>`
@@ -128,13 +154,14 @@ musiccli playlist <url> --export playlist.json
 Download a single track from YouTube.
 
 ```bash
-musiccli download "Artist Name - Song Title"
+musiccli download "Artist Name Song Title"
 musiccli download "Bohemian Rhapsody" --format m4a
+musiccli download "Daft Punk Get Lucky" -o ~/Music
 ```
 
 ### `musiccli search <query>`
 
-Search for tracks, artists, or albums (requires Anna's Archive DB).
+Search for tracks, artists, or albums.
 
 ```bash
 musiccli search "bohemian rhapsody"
@@ -152,9 +179,11 @@ musiccli setup  # Show current config
 # Spotify API (required for playlist import)
 musiccli setup --spotify-client-id <id> --spotify-client-secret <secret>
 
-# Anna's Archive databases (optional, for search/metadata)
+# Turso remote database (optional)
+musiccli setup --turso-url <url> --turso-token <token>
+
+# Local Anna's Archive databases (optional, for power users)
 musiccli setup --db-path /path/to/spotify_clean.sqlite3
-musiccli setup --files-db-path /path/to/spotify_clean_track_files.sqlite3
 ```
 
 ### `musiccli torrents`
@@ -172,7 +201,11 @@ Config is stored in `~/.config/musiccli/config.toml`:
 spotify_client_id = "your_client_id"
 spotify_client_secret = "your_client_secret"
 
-# Anna's Archive databases (optional)
+# Remote database (optional - uses public DB by default)
+turso_url = "libsql://musiccli-db-xxx.turso.io"
+turso_token = "your_token"
+
+# Local databases (optional - for power users)
 db_path = "/path/to/spotify_clean.sqlite3"
 track_files_db_path = "/path/to/spotify_clean_track_files.sqlite3"
 ```
@@ -180,7 +213,7 @@ track_files_db_path = "/path/to/spotify_clean_track_files.sqlite3"
 ### Getting Spotify API Credentials
 
 1. Go to [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard)
-2. Create a new app
+2. Create a new app (any name, any description)
 3. Copy the Client ID and Client Secret
 4. Run: `musiccli setup --spotify-client-id <id> --spotify-client-secret <secret>`
 
@@ -197,25 +230,47 @@ track_files_db_path = "/path/to/spotify_clean_track_files.sqlite3"
 │         ↓                                                   │
 │  2. Fetch metadata via Spotify API                          │
 │         ↓                                                   │
-│  3. For each track:                                         │
-│      ├─ Check Anna's Archive (if configured) → Torrent     │
-│      └─ Search YouTube Music → Download via yt-dlp         │
+│  3. Check track availability in database                    │
+│      ├─ Remote Turso DB (default, no setup needed)         │
+│      └─ Local Anna's Archive DB (optional, 200GB)          │
 │         ↓                                                   │
-│  4. Audio files with Spotify metadata                       │
+│  4. For missing tracks:                                     │
+│      └─ Search YouTube → Download via yt-dlp               │
+│         ↓                                                   │
+│  5. Audio files with Spotify metadata                       │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Anna's Archive Integration (Optional)
+## Database Options
 
-For advanced users, you can download Anna's Archive Spotify metadata (~200GB) for:
-- Faster local search
-- Checking file availability before download
-- Accessing 256 million tracks metadata
+### Option 1: Remote Database (Default)
 
-Visit [annas-archive.li/torrents#spotify](https://annas-archive.li/torrents#spotify) to download.
+By default, MusicCLI uses a hosted Turso database. **No configuration needed!**
+
+- ✅ Works out of the box
+- ✅ No large downloads
+- ✅ Always up to date
+
+### Option 2: Local Database (Power Users)
+
+For offline use or faster queries, download Anna's Archive metadata:
+
+1. Download from [annas-archive.org/torrents#spotify](https://annas-archive.org/torrents#spotify)
+2. Get `annas_archive_spotify_2025_07_metadata.torrent` (~200GB)
+3. Configure: `musiccli setup --db-path /path/to/spotify_clean.sqlite3`
+
+---
+
+## Caching
+
+MusicCLI caches YouTube search results to speed up repeat downloads:
+
+- Cache location: `~/.cache/musiccli/youtube_cache.json`
+- Max entries: 1000 searches
+- Clear cache: Delete the file
 
 ---
 
@@ -225,23 +280,21 @@ Visit [annas-archive.li/torrents#spotify](https://annas-archive.li/torrents#spot
 - **Typer** - CLI framework
 - **Rich** - Terminal UI
 - **yt-dlp** - YouTube download
+- **libsql** - Turso database client
 - **Requests** - HTTP client
-- **SQLite** - Local database (optional)
-
----
-
-## Roadmap
-
-- [ ] Hosted metadata API (no 200GB download needed)
-- [ ] SoundCloud/Deezer fallback
-- [ ] Playlist sync & update
-- [ ] GUI version
 
 ---
 
 ## Contributing
 
 Contributions welcome! Please open an issue or PR.
+
+```bash
+# Development setup
+git clone https://github.com/promaaa/musicCLI
+cd musicCLI
+pip install -e ".[all]"
+```
 
 ---
 
