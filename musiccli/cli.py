@@ -1,0 +1,590 @@
+# musiccli/cli.py
+"""Command-line interface for MusicCLI."""
+
+import typer
+from rich.prompt import Prompt
+from rich.console import Console
+from typing import Optional
+from enum import Enum
+
+from musiccli.config import load_config, set_config_value, CONFIG_PATH
+from musiccli.db import (
+    search_tracks,
+    search_artists,
+    search_albums,
+    get_track_details,
+    get_artist_details,
+    get_album_details,
+    get_tracks_by_ids,
+    get_tracks_file_info_batch,
+)
+from musiccli.ui import (
+    show_tracks,
+    show_track_details,
+    show_artists,
+    show_artist_details,
+    show_albums,
+    show_album_details,
+    show_torrent_info,
+    show_error,
+    show_success,
+    show_info,
+    show_playlist_header,
+    show_playlist_tracks,
+    show_playlist_summary,
+    console,
+)
+from musiccli.magnets import (
+    open_torrents_page,
+)
+from musiccli.spotify import (
+    parse_spotify_url,
+    fetch_playlist,
+)
+
+# -------------------------------------------------
+# App + Console
+# -------------------------------------------------
+
+app = typer.Typer(
+    help="🎵 MusicCLI — Browse Anna's Archive Spotify metadata from your terminal",
+)
+
+
+class SearchType(str, Enum):
+    track = "track"
+    artist = "artist"
+    album = "album"
+
+
+# -------------------------------------------------
+# Setup command
+# -------------------------------------------------
+
+@app.command()
+def setup(
+    db_path: Optional[str] = typer.Option(None, "--db-path", "-d", help="Path to spotify_clean.sqlite3"),
+    track_files_db_path: Optional[str] = typer.Option(None, "--files-db-path", "-f", help="Path to spotify_clean_track_files.sqlite3"),
+    playlists_db_path: Optional[str] = typer.Option(None, "--playlists-db-path", "-p", help="Path to spotify_clean_playlists.sqlite3"),
+    spotify_client_id: Optional[str] = typer.Option(None, "--spotify-client-id", help="Spotify API client ID"),
+    spotify_client_secret: Optional[str] = typer.Option(None, "--spotify-client-secret", help="Spotify API client secret"),
+):
+    """
+    Configure MusicCLI with database paths and Spotify API credentials.
+    """
+    if db_path:
+        set_config_value("db_path", db_path)
+        show_success(f"Main database path set: {db_path}")
+    
+    if track_files_db_path:
+        set_config_value("track_files_db_path", track_files_db_path)
+        show_success(f"Track files database path set: {track_files_db_path}")
+    
+    if playlists_db_path:
+        set_config_value("playlists_db_path", playlists_db_path)
+        show_success(f"Playlists database path set: {playlists_db_path}")
+    
+    if spotify_client_id:
+        set_config_value("spotify_client_id", spotify_client_id)
+        show_success("Spotify client ID set")
+    
+    if spotify_client_secret:
+        set_config_value("spotify_client_secret", spotify_client_secret)
+        show_success("Spotify client secret set")
+    
+    # Show current config if no options provided
+    if not any([db_path, track_files_db_path, playlists_db_path, spotify_client_id, spotify_client_secret]):
+        config = load_config()
+        console.print("\n[bold]Current Configuration[/bold]")
+        console.print(f"Config file: {CONFIG_PATH}")
+        console.print(f"Main DB: {config.get('db_path', '[not set]')}")
+        console.print(f"Track files DB: {config.get('track_files_db_path', '[not set]')}")
+        console.print(f"Playlists DB: {config.get('playlists_db_path', '[not set]')}")
+        console.print(f"Spotify API: {'configured' if config.get('spotify_client_id') else '[not set]'}")
+        console.print("\nTo set paths, use:")
+        console.print("  musiccli setup --db-path /path/to/spotify_clean.sqlite3")
+        console.print("  musiccli setup --files-db-path /path/to/spotify_clean_track_files.sqlite3")
+        console.print("  musiccli setup --playlists-db-path /path/to/spotify_clean_playlists.sqlite3")
+        console.print("  musiccli setup --spotify-client-id <id> --spotify-client-secret <secret>")
+
+
+# -------------------------------------------------
+# Search command
+# -------------------------------------------------
+
+@app.command()
+def search(
+    query: list[str] = typer.Argument(..., help="Search query"),
+    search_type: SearchType = typer.Option(SearchType.track, "--type", "-t", help="Type to search for"),
+    limit: int = typer.Option(20, "--limit", "-l", help="Number of results"),
+):
+    """
+    Search for tracks, artists, or albums.
+    """
+    search_query = " ".join(query)
+    
+    try:
+        if search_type == SearchType.track:
+            results = search_tracks(search_query, limit)
+            if not results:
+                show_error("No tracks found.")
+                raise typer.Exit(code=1)
+            show_tracks(results)
+        
+        elif search_type == SearchType.artist:
+            results = search_artists(search_query, limit)
+            if not results:
+                show_error("No artists found.")
+                raise typer.Exit(code=1)
+            show_artists(results)
+        
+        elif search_type == SearchType.album:
+            results = search_albums(search_query, limit)
+            if not results:
+                show_error("No albums found.")
+                raise typer.Exit(code=1)
+            show_albums(results)
+    
+    except FileNotFoundError as e:
+        show_error(str(e))
+        raise typer.Exit(code=1)
+
+
+# -------------------------------------------------
+# Track info command
+# -------------------------------------------------
+
+@app.command()
+def track(track_id: str = typer.Argument(..., help="Spotify track ID")):
+    """
+    View details for a specific track.
+    """
+    try:
+        track_data = get_track_details(track_id)
+        if not track_data:
+            show_error(f"Track not found: {track_id}")
+            raise typer.Exit(code=1)
+        
+        show_track_details(track_data)
+        
+        # Show torrent info if file available
+        if track_data.get("file_info") and track_data["file_info"].get("status") == "success":
+            console.print("\n[dim]This track is available in the Anna's Archive Spotify collection.[/dim]")
+            console.print("[dim]Visit https://annas-archive.li/torrents#spotify to find bulk torrents.[/dim]")
+            
+            if typer.confirm("🌐 Open torrents page in browser?", default=False):
+                open_torrents_page()
+    
+    except FileNotFoundError as e:
+        show_error(str(e))
+        raise typer.Exit(code=1)
+
+
+# -------------------------------------------------
+# Artist info command
+# -------------------------------------------------
+
+@app.command()
+def artist(artist_id: str = typer.Argument(..., help="Spotify artist ID")):
+    """
+    View details for a specific artist and their albums.
+    """
+    try:
+        artist_data = get_artist_details(artist_id)
+        if not artist_data:
+            show_error(f"Artist not found: {artist_id}")
+            raise typer.Exit(code=1)
+        
+        show_artist_details(artist_data)
+    
+    except FileNotFoundError as e:
+        show_error(str(e))
+        raise typer.Exit(code=1)
+
+
+# -------------------------------------------------
+# Album info command
+# -------------------------------------------------
+
+@app.command()
+def album(album_id: str = typer.Argument(..., help="Spotify album ID")):
+    """
+    View details for a specific album and its tracks.
+    """
+    try:
+        album_data = get_album_details(album_id)
+        if not album_data:
+            show_error(f"Album not found: {album_id}")
+            raise typer.Exit(code=1)
+        
+        show_album_details(album_data)
+    
+    except FileNotFoundError as e:
+        show_error(str(e))
+        raise typer.Exit(code=1)
+
+
+# -------------------------------------------------
+# Interactive command
+# -------------------------------------------------
+
+@app.command()
+def interactive():
+    """
+    Interactive music browser (search → select → view details).
+    """
+    try:
+        # Choose search type
+        search_type = Prompt.ask(
+            "🔍 What do you want to search for?",
+            choices=["track", "artist", "album"],
+            default="track"
+        )
+        
+        query = Prompt.ask("🎵 Enter search query")
+        
+        if search_type == "track":
+            results = search_tracks(query, limit=15)
+            if not results:
+                show_error("No tracks found.")
+                raise typer.Exit()
+            
+            # Show results
+            for idx, t in enumerate(results):
+                artists = t.get("artists", "Unknown")
+                console.print(
+                    f"[cyan][{idx}][/cyan] "
+                    f"{t['name']} — {artists} "
+                    f"[dim]({t.get('popularity', 0)})[/dim]"
+                )
+            
+            selection = Prompt.ask(
+                "Select track index",
+                choices=[str(i) for i in range(len(results))]
+            )
+            
+            selected = results[int(selection)]
+            track_data = get_track_details(selected["id"])
+            show_track_details(track_data)
+        
+        elif search_type == "artist":
+            results = search_artists(query, limit=15)
+            if not results:
+                show_error("No artists found.")
+                raise typer.Exit()
+            
+            for idx, a in enumerate(results):
+                console.print(
+                    f"[cyan][{idx}][/cyan] "
+                    f"{a['name']} "
+                    f"[dim]({a.get('followers_total', 0)} followers)[/dim]"
+                )
+            
+            selection = Prompt.ask(
+                "Select artist index",
+                choices=[str(i) for i in range(len(results))]
+            )
+            
+            selected = results[int(selection)]
+            artist_data = get_artist_details(selected["id"])
+            show_artist_details(artist_data)
+        
+        elif search_type == "album":
+            results = search_albums(query, limit=15)
+            if not results:
+                show_error("No albums found.")
+                raise typer.Exit()
+            
+            for idx, al in enumerate(results):
+                year = (al.get("release_date") or "")[:4]
+                console.print(
+                    f"[cyan][{idx}][/cyan] "
+                    f"{al['name']} ({year}) "
+                    f"[dim]{al.get('album_type', '')}[/dim]"
+                )
+            
+            selection = Prompt.ask(
+                "Select album index",
+                choices=[str(i) for i in range(len(results))]
+            )
+            
+            selected = results[int(selection)]
+            album_data = get_album_details(selected["id"])
+            show_album_details(album_data)
+    
+    except FileNotFoundError as e:
+        show_error(str(e))
+        raise typer.Exit()
+
+
+# -------------------------------------------------
+# Torrents command
+# -------------------------------------------------
+
+@app.command()
+def torrents():
+    """
+    Open Anna's Archive Spotify torrents page.
+    """
+    show_info("Opening Anna's Archive torrents page...")
+    open_torrents_page()
+    show_success("Torrents page opened in browser.")
+
+
+# -------------------------------------------------
+# Playlist command
+# -------------------------------------------------
+
+@app.command()
+def playlist(
+    url: str = typer.Argument(..., help="Spotify playlist URL"),
+    show_all: bool = typer.Option(False, "--all", "-a", help="Show all tracks including missing"),
+    export: Optional[str] = typer.Option(None, "--export", "-e", help="Export results to JSON file"),
+    download: bool = typer.Option(False, "--download", "-d", help="Download tracks via YouTube"),
+    output: str = typer.Option("./downloads", "--output", "-o", help="Output directory for downloads"),
+    format: str = typer.Option("mp3", "--format", "-f", help="Audio format (mp3, m4a, opus)"),
+):
+    """
+    Import and analyze a Spotify playlist.
+    
+    Matches tracks with Anna's Archive database and shows availability.
+    Use --download to download missing tracks via YouTube.
+    """
+    import json
+    
+    try:
+        # Validate URL
+        parsed = parse_spotify_url(url)
+        if not parsed:
+            show_error(f"Invalid Spotify URL: {url}")
+            raise typer.Exit(code=1)
+        
+        item_type, item_id = parsed
+        if item_type != "playlist":
+            show_error(f"URL is a {item_type}, not a playlist.")
+            show_info(f"Use 'musiccli {item_type} {item_id}' instead.")
+            raise typer.Exit(code=1)
+        
+        # Fetch playlist
+        show_info(f"Fetching playlist {item_id}...")
+        playlist_data = fetch_playlist(url)
+        
+        # Show header
+        show_playlist_header(playlist_data)
+        
+        # Get track IDs from playlist
+        tracks = playlist_data.get("tracks", [])
+        if not tracks:
+            show_error("Playlist has no tracks.")
+            raise typer.Exit(code=1)
+        
+        track_ids = [t["id"] for t in tracks if t.get("id")]
+        
+        # Match with local database
+        show_info(f"Matching {len(track_ids)} tracks with Anna's Archive database...")
+        
+        # Get track metadata from main DB
+        db_tracks = get_tracks_by_ids(track_ids)
+        
+        # Get file info
+        file_infos = get_tracks_file_info_batch(track_ids)
+        
+        # Build results with status
+        results = []
+        stats = {"total": len(tracks), "available": 0, "missing": 0, "not_in_db": 0}
+        
+        for track in tracks:
+            track_id = track.get("id")
+            if not track_id:
+                continue
+            
+            result = {
+                "id": track_id,
+                "name": track.get("name", "Unknown"),
+                "artists": track.get("artists", "Unknown"),
+                "duration_ms": track.get("duration_ms", 0),
+            }
+            
+            # Check if in main DB
+            if track_id in db_tracks:
+                db_track = db_tracks[track_id]
+                result["name"] = db_track.get("name", result["name"])
+                result["artists"] = db_track.get("artists", result["artists"])
+                result["duration_ms"] = db_track.get("duration_ms", result["duration_ms"])
+                result["album_name"] = db_track.get("album_name")
+                result["popularity"] = db_track.get("popularity")
+                
+                # Check file availability
+                if track_id in file_infos:
+                    fi = file_infos[track_id]
+                    result["file_info"] = fi
+                    if fi.get("status") == "success":
+                        result["status"] = "available"
+                        stats["available"] += 1
+                    else:
+                        result["status"] = "missing"
+                        stats["missing"] += 1
+                else:
+                    # In DB but no file info - assume might be available
+                    result["status"] = "available"
+                    stats["available"] += 1
+            else:
+                result["status"] = "not_in_db"
+                stats["not_in_db"] += 1
+            
+            results.append(result)
+        
+        # Show tracks
+        show_playlist_tracks(results, show_all=show_all)
+        
+        # Show summary
+        show_playlist_summary(stats)
+        
+        # Export if requested
+        if export:
+            export_data = {
+                "playlist": {
+                    "id": playlist_data.get("id"),
+                    "name": playlist_data.get("name"),
+                    "owner": playlist_data.get("owner"),
+                    "total_tracks": playlist_data.get("total_tracks"),
+                    "source": playlist_data.get("source"),
+                },
+                "stats": stats,
+                "tracks": results,
+            }
+            with open(export, "w", encoding="utf-8") as f:
+                json.dump(export_data, f, indent=2, ensure_ascii=False)
+            show_success(f"Exported to {export}")
+        
+        # Download if requested
+        if download:
+            # Get tracks to download (missing from archive)
+            tracks_to_download = [
+                r for r in results 
+                if r.get("status") in ("missing", "not_in_db")
+            ]
+            
+            if not tracks_to_download:
+                show_info("All tracks are available in Anna's Archive! No download needed.")
+                show_info("Visit https://annas-archive.li/torrents#spotify to download the bulk torrents.")
+            else:
+                show_info(f"Downloading {len(tracks_to_download)} tracks via YouTube...")
+                
+                from musiccli.youtube import download_tracks_batch
+                from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
+                
+                # Progress tracking
+                downloaded = 0
+                failed = 0
+                
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    BarColumn(),
+                    TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                    console=console,
+                ) as progress:
+                    task = progress.add_task("Downloading...", total=len(tracks_to_download))
+                    
+                    def progress_callback(track_name, status, info):
+                        nonlocal downloaded, failed
+                        if status == 'completed':
+                            downloaded += 1
+                            progress.update(task, advance=1, description=f"✅ {track_name[:30]}")
+                        elif status == 'failed' or status == 'not_found':
+                            failed += 1
+                            progress.update(task, advance=1, description=f"❌ {track_name[:30]}")
+                        elif status == 'downloading':
+                            progress.update(task, description=f"⬇️ {track_name[:30]}")
+                        elif status == 'searching':
+                            progress.update(task, description=f"🔍 {track_name[:30]}")
+                    
+                    download_results = download_tracks_batch(
+                        tracks=tracks_to_download,
+                        output_dir=output,
+                        format=format,
+                        progress_callback=progress_callback,
+                    )
+                
+                console.print()
+                show_success(f"Downloaded: {downloaded}/{len(tracks_to_download)}")
+                if failed > 0:
+                    show_error(f"Failed: {failed}")
+                show_info(f"Files saved to: {output}")
+    
+    except FileNotFoundError as e:
+        show_error(str(e))
+        raise typer.Exit(code=1)
+    except Exception as e:
+        show_error(f"Error: {e}")
+        raise typer.Exit(code=1)
+
+
+# -------------------------------------------------
+# Download command (standalone)
+# -------------------------------------------------
+
+@app.command()
+def download(
+    query: list[str] = typer.Argument(..., help="Track name or 'artist - title' to search"),
+    output: str = typer.Option("./downloads", "--output", "-o", help="Output directory"),
+    format: str = typer.Option("mp3", "--format", "-f", help="Audio format (mp3, m4a, opus)"),
+):
+    """
+    Download a single track from YouTube by search query.
+    
+    Example: musiccli download "Queen Bohemian Rhapsody"
+    """
+    from musiccli.youtube import search_youtube, download_track
+    
+    search_query = " ".join(query)
+    
+    show_info(f"Searching YouTube for: {search_query}")
+    
+    results = search_youtube(search_query, limit=5)
+    
+    if not results:
+        show_error("No results found on YouTube.")
+        raise typer.Exit(code=1)
+    
+    # Show results
+    console.print("\n[bold]Search Results:[/bold]")
+    for idx, r in enumerate(results):
+        duration = r.get('duration', 0)
+        if duration:
+            mins, secs = divmod(int(duration), 60)
+            dur_str = f"{mins}:{secs:02d}"
+        else:
+            dur_str = "--:--"
+        
+        console.print(
+            f"[cyan][{idx}][/cyan] "
+            f"{r['title'][:50]} "
+            f"[dim]({dur_str}) - {r.get('channel', 'Unknown')}[/dim]"
+        )
+    
+    # Select
+    selection = Prompt.ask(
+        "Select track to download",
+        choices=[str(i) for i in range(len(results))],
+        default="0"
+    )
+    
+    selected = results[int(selection)]
+    
+    show_info(f"Downloading: {selected['title']}")
+    
+    file_path = download_track(
+        url=selected['url'],
+        output_dir=output,
+        format=format,
+    )
+    
+    if file_path:
+        show_success(f"Downloaded: {file_path}")
+    else:
+        show_error("Download failed.")
+        raise typer.Exit(code=1)
+
+

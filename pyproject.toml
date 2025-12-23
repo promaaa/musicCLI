@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[project]
+name = "musiccli"
+version = "0.1.0"
+description = "🎵 Browse Anna's Archive Spotify metadata from your terminal"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+
+authors = [
+  { name = "eyeblech", email = "0x1123@proton.me" }
+]
+
+dependencies = [
+  "typer>=0.9",
+  "rich>=13.0",
+  "tomli-w>=1.0",
+  "tomli>=2.0; python_version < '3.11'",
+  "requests>=2.28",
+  "yt-dlp>=2024.0"
+]
+
+keywords = [
+  "cli",
+  "music",
+  "spotify",
+  "annas-archive",
+  "terminal",
+  "python-cli"
+]
+
+classifiers = [
+  "Environment :: Console",
+  "Intended Audience :: End Users/Desktop",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+]
+
+[project.urls]
+Homepage = "https://github.com/eyeblech/musiccli"
+Repository = "https://github.com/eyeblech/musiccli"
+Issues = "https://github.com/eyeblech/musiccli/issues"
+
+[project.scripts]
+musiccli = "musiccli.cli:app"
