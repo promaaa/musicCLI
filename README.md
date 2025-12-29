@@ -1,35 +1,23 @@
-# MusicCLI
+# MusicCLI 🎵
 
-Download Spotify playlists from your terminal.
+Terminal-first way to pull Spotify playlists with clean metadata.
 
 [![Version](https://img.shields.io/badge/version-0.2.0-blue)](https://github.com/promaaa/musicCLI)
 [![Python](https://img.shields.io/badge/python-3.9+-green)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-purple)](LICENSE)
 
-## What it does
+## Highlights 
 
-Paste a Spotify playlist URL, and MusicCLI will:
-- Fetch the track list from Spotify's API
-- Check which tracks are in Anna's Archive
-- Download missing ones from YouTube with proper metadata
+- Paste a Spotify playlist URL, get tracks with embedded metadata
+- Fills gaps by pulling audio from YouTube via yt-dlp
+- Checks availability against Anna's Archive (remote DB by default)
+- Fast search (tracks, artists, albums) with caching
+- Export results to JSON or CSV
 
-You can also search for individual tracks and download them directly.
+## Install
 
-## Features
+Requires Python 3.9+ and FFmpeg.
 
-- Import playlists by URL
-- Search tracks/artists/albums
-- Download from YouTube with Spotify metadata
-- Check availability in Anna's Archive
-- Export to JSON/CSV
-- Remote database (no 200GB download required)
-- YouTube search caching
-
-## Installation
-
-You need Python 3.9+ and FFmpeg.
-
-Install FFmpeg:
 ```bash
 # macOS
 brew install ffmpeg
@@ -39,133 +27,78 @@ sudo apt install ffmpeg
 
 # Windows
 winget install ffmpeg
-```
 
-Install MusicCLI:
-```bash
+# Install the CLI
 pip install musiccli
 ```
 
 From source:
+
 ```bash
 git clone https://github.com/promaaa/musicCLI
 cd musicCLI
 pip install -e .
 ```
 
-## Quick Start
+## Configure
 
-First, set up your Spotify API credentials (free, takes 2 minutes):
+Create a Spotify app (free) at https://developer.spotify.com/dashboard, then run:
 
-1. Create an app at [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard)
-2. Copy your Client ID and Secret
-3. Run:
 ```bash
 musiccli setup --spotify-client-id YOUR_ID --spotify-client-secret YOUR_SECRET
 ```
 
-Now you're ready:
+Configuration file: `~/.config/musiccli/config.toml`
+
+```toml
+spotify_client_id = "your_client_id"
+spotify_client_secret = "your_client_secret"
+
+# Optional remote DB (default is provided)
+turso_url = "libsql://musiccli-db-xxx.turso.io"
+turso_token = "your_token"
+
+# Optional local DB (≈200GB) for offline/faster lookups
+db_path = "/path/to/spotify_clean.sqlite3"
+track_files_db_path = "/path/to/spotify_clean_track_files.sqlite3"
+```
+
+## Use it 
 
 ```bash
 # Analyze a playlist
 musiccli playlist https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M
 
 # Download missing tracks
-musiccli playlist https://open.spotify.com/playlist/... --download
+musiccli playlist <url> --download
 
-# Download a single track
+# Download one track
 musiccli download "Bohemian Rhapsody"
-```
 
-## Commands
-
-### Playlist import
-
-```bash
-musiccli playlist <url>
-```
-
-Options:
-- `--all, -a` - Show all tracks (including those not in archive)
-- `--download, -d` - Download missing tracks from YouTube  
-- `--output, -o` - Where to save files (default: ./downloads)
-- `--format, -f` - Audio format: mp3, m4a, opus (default: mp3)
-- `--export, -e` - Export to JSON
-- `--csv` - Export to CSV
-
-Examples:
-```bash
-musiccli playlist <url> --all
-musiccli playlist <url> --download --format m4a
-musiccli playlist <url> --csv tracks.csv
-```
-
-### Single track download
-
-```bash
-musiccli download <query>
-```
-
-Examples:
-```bash
-musiccli download "Daft Punk Get Lucky"
-musiccli download "Bohemian Rhapsody" --format m4a -o ~/Music
-```
-
-### Search
-
-```bash
-musiccli search <query>
+# Search
 musiccli search --type artist "queen"
-musiccli search --type album "a night at the opera"
 ```
 
-### Setup
-
-```bash
-# View current config
-musiccli setup
-
-# Set Spotify credentials
-musiccli setup --spotify-client-id <id> --spotify-client-secret <secret>
-
-# Use custom Turso database (optional)
-musiccli setup --turso-url <url> --turso-token <token>
-
-# Use local database (optional)
-musiccli setup --db-path /path/to/spotify_clean.sqlite3
-```
-
-## Configuration
-
-Config file: `~/.config/musiccli/config.toml`
-
-```toml
-spotify_client_id = "your_client_id"
-spotify_client_secret = "your_client_secret"
-
-# Optional: custom remote database
-turso_url = "libsql://musiccli-db-xxx.turso.io"
-turso_token = "your_token"
-
-# Optional: local database files (200GB)
-db_path = "/path/to/spotify_clean.sqlite3"
-track_files_db_path = "/path/to/spotify_clean_track_files.sqlite3"
-```
+Playlist options:
+- `--download, -d` download missing tracks from YouTube
+- `--all, -a` show all tracks, including missing
+- `--output, -o` output directory (default: ./downloads)
+- `--format, -f` audio format: mp3 | m4a | opus (default: mp3)
+- `--export, -e` export results to JSON
+- `--csv` export results to CSV
 
 ## How it works
 
-1. You paste a Spotify playlist URL
-2. MusicCLI fetches track metadata via Spotify API
-3. Checks which tracks exist in the database (remote or local)
-4. Downloads missing tracks from YouTube using yt-dlp
-5. Embeds Spotify metadata in the audio files
+1. Fetch playlist metadata from Spotify
+2. Check track availability in the remote (or local) database
+3. For missing tracks, search YouTube and download with yt-dlp
+4. Write audio files with Spotify tags embedded
 
-The remote database is used by default - no setup needed. If you want faster queries or offline access, you can download the 200GB Anna's Archive metadata from [annas-archive.org/torrents#spotify](https://annas-archive.org/torrents#spotify).
+The hosted database is enabled by default—no 200GB download required. Power users can point to local Anna's Archive databases for offline or faster queries.
 
 ## Caching
 
-YouTube search results are cached in `~/.cache/musiccli/youtube_cache.json` (max 1000 entries). Delete the file to clear the cache.
+YouTube search results cache: `~/.cache/musiccli/youtube_cache.json` (max 1000 entries). Delete the file to reset.
 
 ## Tech
 
@@ -177,7 +110,7 @@ YouTube search results are cached in `~/.cache/musiccli/youtube_cache.json` (max
 
 ## Contributing
 
-PRs welcome.
+Pull requests are welcome.
 
 ```bash
 git clone https://github.com/promaaa/musicCLI
